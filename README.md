@@ -151,7 +151,7 @@ CLI utility for working with **`.bpt`** files (Bitrix business process templates
 ### 📥 Download
 
 📋 **Pre-built binaries** (Windows/Linux/macOS):  
-👉 [**Releases · bitrix-bpt-tool**](https://github.com/bslie/bitrix-bpt-tool/releases/latest)
+👉 [**Releases · bitrix-bpt-tool**](https://github.com/bslie/bitrix-bpt-cli-tool/releases/)
 
 ### 🔧 Build from Source
 
