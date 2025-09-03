@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <a href="#english-version">🇺🇸 English</a> •
-  <a href="#русская-версия">🇷🇺 Русский</a>
+  <a href="#-english-version">🇺🇸 English</a> •
+  <a href="#-русская-версия">🇷🇺 Русский</a>
 </p>
 
 ---
