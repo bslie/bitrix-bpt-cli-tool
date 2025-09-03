@@ -7,7 +7,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
-using PhpSerializerNET;  // NuGet
+using PhpSerializerNET; // NuGet
 
 namespace BptTool
 {
@@ -47,20 +47,80 @@ namespace BptTool
 BptTool — утилита для Bitrix *.bpt
 
 Использование:
-  BptTool dump <input.bpt> [-o out.txt] [--pretty]
-      Извлекает из .bpt строку PHP-serialized (по умолчанию) или печатает древо (--pretty).
+  BptTool dump <input.bpt|-> [-o out.txt|'-'] [--pretty] [--in <path>] [--out <path>]
+      Извлекает из .bpt строку PHP-serialized или печатает древо (--pretty).
 
-  BptTool build <input.txt> -o out.bpt [--gzip | --zlib | --deflate | --plain]
+  BptTool build <input.txt|-> -o out.bpt|'-' [--gzip | --zlib | --deflate | --plain] [--in <path>] [--out <path>]
       Собирает .bpt из текстового файла с ''сырым'' PHP-serialized содержимым.
       ВАЖНО: ничего не трогает в тексте (никакого Trim), байты идут как есть.
 
-  BptTool info <input.bpt> [--peek N]
-      Печатает информацию о файле: имя, размер, расширение, способ сжатия (gzip/zlib/deflate/plain),
+  BptTool info <input.bpt> [--peek N] [--in <path>]
+      Печатает информацию о файле: имя, размер, способ сжатия (gzip/zlib/deflate/plain),
       и проверяет, похоже ли содержимое на PHP-serialized строку.
+
+Примечания:
+  '-' вместо пути означает stdin (для входа) или stdout (для выхода).
+  Пути могут быть абсолютными или относительными; недостающие директории для -o создаются автоматически.
 ");
         }
 
-        // -------------------- I N F O --------------------
+        // ===================== Utils: paths/stdin/out =====================
+
+        static string NormalizePath(string pathOrDash, bool forOutput = false)
+        {
+            if (pathOrDash == "-") return "-";
+            var full = Path.GetFullPath(pathOrDash);
+            if (forOutput)
+            {
+                var dir = Path.GetDirectoryName(full);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir!);
+            }
+            return full;
+        }
+
+        static byte[] ReadAllBytesFrom(string pathOrDash)
+        {
+            if (pathOrDash == "-")
+            {
+                using var ms = new MemoryStream();
+                Console.OpenStandardInput().CopyTo(ms);
+                return ms.ToArray();
+            }
+            return File.ReadAllBytes(pathOrDash);
+        }
+
+        static string ReadAllTextFrom(string pathOrDash)
+        {
+            if (pathOrDash == "-")
+            {
+                using var sr = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+                return sr.ReadToEnd();
+            }
+            return File.ReadAllText(pathOrDash, new UTF8Encoding(false));
+        }
+
+        static void WriteAllTextTo(string pathOrDash, string content)
+        {
+            if (pathOrDash == "-")
+            {
+                Console.Out.Write(content);
+                return;
+            }
+            File.WriteAllText(pathOrDash, content, new UTF8Encoding(false));
+        }
+
+        static void WriteAllBytesTo(string pathOrDash, byte[] bytes)
+        {
+            if (pathOrDash == "-")
+            {
+                using var stdout = Console.OpenStandardOutput();
+                stdout.Write(bytes, 0, bytes.Length);
+                return;
+            }
+            File.WriteAllBytes(pathOrDash, bytes);
+        }
+
+        // ===================== INFO =====================
 
         static int CmdInfo(string[] args)
         {
@@ -70,6 +130,7 @@ BptTool — утилита для Bitrix *.bpt
             string path = args[1];
             int? peek = null;
 
+            // флаги
             for (int i = 2; i < args.Length; i++)
             {
                 switch (args[i])
@@ -79,31 +140,35 @@ BptTool — утилита для Bitrix *.bpt
                         if (!int.TryParse(args[++i], out int n) || n < 0) throw new ArgumentException("--peek: укажи неотрицательное число");
                         peek = n;
                         break;
+                    case "--in":
+                        if (i + 1 >= args.Length) throw new ArgumentException("--in: отсутствует значение");
+                        path = args[++i];
+                        break;
                     default:
                         throw new ArgumentException($"Неизвестный параметр: {args[i]}");
                 }
             }
 
+            path = NormalizePath(path);
+            if (path == "-") throw new ArgumentException("info: читай из файла, а не из stdin");
+
             var fi = new FileInfo(path);
-            if (!fi.Exists)
-                throw new FileNotFoundException("Файл не найден", path);
+            if (!fi.Exists) throw new FileNotFoundException("Файл не найден", path);
 
-            byte[] raw = File.ReadAllBytes(path);
+            byte[] raw = ReadAllBytesFrom(path);
 
-            var kind = TryDetectKindByHeader(raw);
+            var kindByHeader = TryDetectKindByHeader(raw);
             CompressionKind detected;
             string text = TryInflateAuto(raw, out detected);
+            bool looksSerialized = LooksLikePhpSerialized(text);
 
-            string trimmed = text; // НЕ трогаем, просто для LooksLike
-            bool looksSerialized = LooksLikePhpSerialized(trimmed);
-
-            Console.WriteLine($"Файл            : {fi.FullName}");
-            Console.WriteLine($"Размер          : {fi.Length} байт");
-            Console.WriteLine($"Расширение      : {fi.Extension}");
-            Console.WriteLine($"По заголовку    : {KindToHuman(kind)}");
-            Console.WriteLine($"Фактический разбор: {KindToHuman(detected)}");
-            Console.WriteLine($"Контент         : {(looksSerialized ? "Похоже на PHP-serialized" : "Не похоже на PHP-serialized")}");
-            Console.WriteLine($"Длина текста после распаковки: {text.Length} символов");
+            Console.WriteLine($"Файл                : {fi.FullName}");
+            Console.WriteLine($"Размер              : {fi.Length} байт");
+            Console.WriteLine($"Расширение          : {fi.Extension}");
+            Console.WriteLine($"По заголовку        : {KindToHuman(kindByHeader)}");
+            Console.WriteLine($"Фактический разбор  : {KindToHuman(detected)}");
+            Console.WriteLine($"Контент             : {(looksSerialized ? "Похоже на PHP-serialized" : "Не похоже на PHP-serialized")}");
+            Console.WriteLine($"Длина распакованного текста: {text.Length} символов");
 
             if (peek is int p && p > 0)
             {
@@ -139,7 +204,7 @@ BptTool — утилита для Bitrix *.bpt
             return rx.IsMatch(head);
         }
 
-        // -------------------- D U M P --------------------
+        // ===================== DUMP =====================
 
         static int CmdDump(string[] args)
         {
@@ -155,8 +220,13 @@ BptTool — утилита для Bitrix *.bpt
                 switch (args[i])
                 {
                     case "-o":
-                        if (i + 1 >= args.Length) throw new ArgumentException("-o: отсутствует значение");
+                    case "--out":
+                        if (i + 1 >= args.Length) throw new ArgumentException($"{args[i]}: отсутствует значение");
                         output = args[++i];
+                        break;
+                    case "--in":
+                        if (i + 1 >= args.Length) throw new ArgumentException("--in: отсутствует значение");
+                        input = args[++i];
                         break;
                     case "--pretty":
                         pretty = true;
@@ -166,30 +236,33 @@ BptTool — утилита для Bitrix *.bpt
                 }
             }
 
-            byte[] raw = File.ReadAllBytes(input);
+            input = NormalizePath(input);
+            byte[] raw = ReadAllBytesFrom(input);
             CompressionKind detected;
             string serialized = TryInflateAuto(raw, out detected);
 
             if (pretty)
             {
                 var root = PhpSerialization.Deserialize(serialized);
-                using var sw = output is null
-                    ? Console.Out
+                if (output is null) output = "-";
+                output = NormalizePath(output, forOutput: true);
+
+                using var tw = output == "-" ? Console.Out
                     : new StreamWriter(File.Open(output, FileMode.Create, FileAccess.Write, FileShare.None), new UTF8Encoding(false));
-                DumpPretty(root, 0, sw);
+                DumpPretty(root, 0, tw);
+                tw.Flush();
             }
             else
             {
-                if (output is null)
-                    Console.Write(serialized);
-                else
-                    File.WriteAllText(output, serialized, new UTF8Encoding(false));
+                if (output is null) output = "-";
+                output = NormalizePath(output, forOutput: true);
+                WriteAllTextTo(output, serialized);
             }
 
             return 0;
         }
 
-        // -------------------- B U I L D --------------------
+        // ===================== BUILD =====================
 
         static int CmdBuild(string[] args)
         {
@@ -198,15 +271,20 @@ BptTool — утилита для Bitrix *.bpt
 
             string inputTxt = args[1];
             string? outputBpt = null;
-            CompressionKind kind = CompressionKind.GZip; // дефолт как раньше, но чаще подходит ZLib/Deflate — см. ниже.
+            CompressionKind kind = CompressionKind.GZip; // по умолчанию; часто для Bitrix подходит ZLib или Deflate.
 
             for (int i = 2; i < args.Length; i++)
             {
                 switch (args[i])
                 {
                     case "-o":
-                        if (i + 1 >= args.Length) throw new ArgumentException("-o: отсутствует значение");
+                    case "--out":
+                        if (i + 1 >= args.Length) throw new ArgumentException($"{args[i]}: отсутствует значение");
                         outputBpt = args[++i];
+                        break;
+                    case "--in":
+                        if (i + 1 >= args.Length) throw new ArgumentException("--in: отсутствует значение");
+                        inputTxt = args[++i];
                         break;
                     case "--gzip": kind = CompressionKind.GZip; break;
                     case "--zlib": kind = CompressionKind.ZLib; break;
@@ -220,14 +298,19 @@ BptTool — утилита для Bitrix *.bpt
             if (outputBpt is null)
                 throw new ArgumentException("build: задай выходной файл через -o out.bpt");
 
+            inputTxt = NormalizePath(inputTxt);
+            outputBpt = NormalizePath(outputBpt, forOutput: true);
+
             // НИЧЕГО НЕ ТРИММ: Bitrix/serialize чувствителен к байтам.
-            string serialized = File.ReadAllText(inputTxt, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            string serialized = ReadAllTextFrom(inputTxt);
 
             byte[] bytes = BuildBytes(serialized, kind);
-            File.WriteAllBytes(outputBpt, bytes);
+            WriteAllBytesTo(outputBpt, bytes);
 
             return 0;
         }
+
+        // ===================== CORE =====================
 
         enum CompressionKind { Plain, GZip, ZLib, Deflate, Unknown }
 
@@ -245,18 +328,15 @@ BptTool — утилита для Bitrix *.bpt
             };
         }
 
-        // -------------------- C O R E --------------------
-
         static CompressionKind TryDetectKindByHeader(byte[] data)
         {
             if (data.Length > 2 && data[0] == 0x1F && data[1] == 0x8B) return CompressionKind.GZip; // gzip
             if (data.Length > 2 && data[0] == 0x78) return CompressionKind.ZLib; // zlib (0x78 0x01/9C/DA)
-            return CompressionKind.Unknown; // deflate/plain не различить по сигнатуре
+            return CompressionKind.Unknown; // deflate/plain не отличить по сигнатуре
         }
 
         static string TryInflateAuto(byte[] data, out CompressionKind detected)
         {
-            // 1) попробуем по заголовку
             var headerKind = TryDetectKindByHeader(data);
             try
             {
@@ -268,10 +348,8 @@ BptTool — утилита для Bitrix *.bpt
             }
             catch { /* fallthrough */ }
 
-            // 2) попробуем как raw deflate
             try { detected = CompressionKind.Deflate; return InflateDeflate(data); } catch { }
 
-            // 3) попробуем трактовать как UTF-8 plain
             try
             {
                 string s = Encoding.UTF8.GetString(data);
@@ -340,7 +418,8 @@ BptTool — утилита для Bitrix *.bpt
             return ms.ToArray();
         }
 
-        /// <summary>Грубый pretty-print PHP-массивов/объектов.</summary>
+        // ===================== Pretty dump =====================
+
         static void DumpPretty(object node, int level, TextWriter tw)
         {
             string pad = new string(' ', level * 2);
