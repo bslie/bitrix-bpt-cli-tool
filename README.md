@@ -31,7 +31,7 @@ CLI-утилита для работы с файлами **`.bpt`** (шабло�
 ### 📥 Загрузка
 
 📋 **Готовые сборки** (Windows/Linux/macOS):  
-👉 [**Releases · bitrix-bpt-tool**](https://github.com/bslie/bitrix-bpt-tool/releases/latest)
+👉 [**Releases · bitrix-bpt-tool**](https://github.com/bslie/bitrix-bpt-cli-tool/releases/)
 
 ### 🔧 Установка из исходников
 
